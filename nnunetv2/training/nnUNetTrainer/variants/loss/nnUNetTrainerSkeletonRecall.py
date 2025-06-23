@@ -458,41 +458,27 @@ class nnUNetTrainerSkeletonRecall(nnUNetTrainer):
 
 
 class nnUNetTrainerSkeletonRecallR5(nnUNetTrainerSkeletonRecall):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.weight_srec = 0.5
-
     def _build_loss(self):
         if self.label_manager.ignore_label is not None:
             warnings.warn('Support for ignore label with Skeleton Recall is experimental and may not work as expected')
-
-        loss = DC_SkelREC_and_CE_loss(
-            soft_dice_kwargs={
-                'batch_dice': self.configuration_manager.batch_dice,
-                'smooth': 1e-5,
-                'do_bg': False,
-                'ddp': self.is_ddp
-            },
-            soft_skelrec_kwargs={
-                'batch_dice': self.configuration_manager.batch_dice,
-                'smooth': 1e-5,
-                'do_bg': False,
-                'ddp': self.is_ddp
-            },
-            ce_kwargs={},
-            weight_ce=1,
-            weight_dice=1,
-            weight_srec=self.weight_srec,  # ← 여기서 정상 사용 가능
-            ignore_label=self.label_manager.ignore_label,
-            dice_class=MemoryEfficientSoftDiceLoss
-        )
+        loss = DC_SkelREC_and_CE_loss(soft_dice_kwargs={'batch_dice': self.configuration_manager.batch_dice, 
+                                                        'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp}, 
+                                      soft_skelrec_kwargs={'batch_dice': self.configuration_manager.batch_dice, 
+                                                           'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp}, 
+                                      ce_kwargs={}, weight_ce=1, weight_dice=1, weight_srec=0.5, 
+                                      ignore_label=self.label_manager.ignore_label, dice_class=MemoryEfficientSoftDiceLoss)
 
         if self.enable_deep_supervision:
             deep_supervision_scales = self._get_deep_supervision_scales()
+
+            # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
+            # this gives higher resolution outputs more weight in the loss
             weights = np.array([1 / (2 ** i) for i in range(len(deep_supervision_scales))])
             weights[-1] = 0
-            weights = weights / weights.sum()
-            loss = DeepSupervisionWrapper(loss, weights)
 
+            # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
+            weights = weights / weights.sum()
+            # now wrap the loss
+            loss = DeepSupervisionWrapper(loss, weights)
         return loss
     
